@@ -1,36 +1,47 @@
 import { NextResponse } from 'next/server'
-import acceptLanguage from 'accept-language'
-import { fallbackLng, languages } from './app/i18n/settings'
+import Negotiator from 'negotiator'
+import { match } from '@formatjs/intl-localematcher'
+import { languages, fallbackLng } from './app/i18n/settings'
 
-acceptLanguage.languages(languages)
+// Función para obtener el mejor idioma basado en las cabeceras del navegador
+function getLocale(request) {
+  const headers = {}
+  request.headers.forEach((value, key) => (headers[key] = value))
 
-export const config = {
-  matcher: ['/((?!api|_next/static|_next/image|assets|favicon.ico|sw.js).*)']
+  // Las cabeceras de Negotiator esperan un objeto simple
+  const negotiatorHeaders = { 'accept-language': headers['accept-language'] }
+  
+  // Obtiene los idiomas soportados por la librería
+  const locales = [...languages]
+
+  // Usa Negotiator y intl-localematcher para encontrar el mejor idioma
+  let negotiator = new Negotiator({ headers: negotiatorHeaders })
+  let bestLocale = match(negotiator.languages(locales), locales, fallbackLng)
+  
+  return bestLocale
 }
 
-const cookieName = 'i18next'
+export function middleware(request) {
+  const pathname = request.nextUrl.pathname
 
-export function middleware(req) {
-  let lng
-  if (req.cookies.has(cookieName)) lng = acceptLanguage.get(req.cookies.get(cookieName).value)
-  if (!lng) lng = acceptLanguage.get(req.headers.get('Accept-Language'))
-  if (!lng) lng = fallbackLng
+  // Revisa si la ruta ya tiene un prefijo de idioma (ej: /es/servicios)
+  const pathnameIsMissingLocale = languages.every(
+    (locale) => !pathname.startsWith(`/${locale}/`) && pathname !== `/${locale}`
+  )
 
-  // Redirigir si el idioma no está en la URL
-  if (
-    !languages.some(loc => req.nextUrl.pathname.startsWith(`/${loc}`)) &&
-    !req.nextUrl.pathname.startsWith('/_next')
-  ) {
-    return NextResponse.redirect(new URL(`/${lng}${req.nextUrl.pathname}`, req.url))
+  // Si no tiene idioma, redirige a la ruta con el idioma detectado
+  if (pathnameIsMissingLocale) {
+    const locale = getLocale(request)
+    return NextResponse.redirect(
+      new URL(`/${locale}${pathname}`, request.url)
+    )
   }
+}
 
-  if (req.headers.has('referer')) {
-    const refererUrl = new URL(req.headers.get('referer'))
-    const lngInReferer = languages.find((l) => refererUrl.pathname.startsWith(`/${l}`))
-    const response = NextResponse.next()
-    if (lngInReferer) response.cookies.set(cookieName, lngInReferer)
-    return response
-  }
-
-  return NextResponse.next()
+// Configuración del Matcher
+export const config = {
+  matcher: [
+    // Omitir todas las rutas internas (api, _next/static, _next/image, assets, etc.)
+    '/((?!api|_next/static|_next/image|assets|favicon.ico).*)',
+  ],
 }
